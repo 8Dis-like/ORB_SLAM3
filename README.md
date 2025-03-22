@@ -1,3 +1,10 @@
+# Added pose publishing interface
+1. Modified and compiled the node of ORB-SLAM3 running in ROS environment. Created PublishPose(const Sophus::SE3f& Tcw) function to receive and adjust pose.
+
+2. Added keyframe output interface in the node.
+
+3. Added pose publishing topic.
+
 # ORB-SLAM3
 
 ### V1.0, December 22th, 2021
