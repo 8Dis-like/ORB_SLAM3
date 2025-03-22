@@ -29,7 +29,16 @@
 #include <message_filters/sync_policies/approximate_time.h>
 
 #include<opencv2/core/core.hpp>
-
+#include <geometry_msgs/PoseStamped.h>
+#include <sensor_msgs/PointCloud2.h>
+#include <pcl_ros/point_cloud.h>
+#include <pcl/point_types.h>
+#include <pcl/conversions.h>
+#include <pcl/io/pcd_io.h>
+#include <tf/tf.h>
+#include <Eigen/Core>
+#include <Eigen/Geometry>
+#include "Tracking.h"
 #include"../../../include/System.h"
 
 using namespace std;
@@ -40,15 +49,21 @@ public:
     ImageGrabber(ORB_SLAM3::System* pSLAM):mpSLAM(pSLAM){}
 
     void GrabStereo(const sensor_msgs::ImageConstPtr& msgLeft,const sensor_msgs::ImageConstPtr& msgRight);
-
+    void PublishPose(const Sophus::SE3f& Tcw);
     ORB_SLAM3::System* mpSLAM;
     bool do_rectify;
     cv::Mat M1l,M2l,M1r,M2r;
+   
 };
+// 全局发布器变量（必须在main之前声明）
+ros::Publisher pose_pub;
+
+// 这里假设全局指针或引用指向 ORB_SLAM3 系统对象
+ORB_SLAM3::System* mpSLAM = nullptr;
 
 int main(int argc, char **argv)
 {
-    ros::init(argc, argv, "RGBD");
+    ros::init(argc, argv, "slam");
     ros::start();
 
     if(argc != 4)
@@ -57,10 +72,10 @@ int main(int argc, char **argv)
         ros::shutdown();
         return 1;
     }    
-
+    ros::NodeHandle nh;
     // Create SLAM system. It initializes all system threads and gets ready to process frames.
     ORB_SLAM3::System SLAM(argv[1],argv[2],ORB_SLAM3::System::STEREO,true);
-
+    mpSLAM = &SLAM;  
     ImageGrabber igb(&SLAM);
 
     stringstream ss(argv[3]);
@@ -105,16 +120,16 @@ int main(int argc, char **argv)
         cv::initUndistortRectifyMap(K_r,D_r,R_r,P_r.rowRange(0,3).colRange(0,3),cv::Size(cols_r,rows_r),CV_32F,igb.M1r,igb.M2r);
     }
 
-    ros::NodeHandle nh;
-
-    message_filters::Subscriber<sensor_msgs::Image> left_sub(nh, "/camera/left/image_raw", 1);
-    message_filters::Subscriber<sensor_msgs::Image> right_sub(nh, "/camera/right/image_raw", 1);
+  
+    // 初始化发布器
+    pose_pub = nh.advertise<geometry_msgs::PoseStamped>("/orb_slam3/pose", 10);
+    message_filters::Subscriber<sensor_msgs::Image> left_sub(nh, "/camera/fisheye1/image_raw", 1);
+    message_filters::Subscriber<sensor_msgs::Image> right_sub(nh, "/camera/fisheye2/image_raw", 1);
     typedef message_filters::sync_policies::ApproximateTime<sensor_msgs::Image, sensor_msgs::Image> sync_pol;
     message_filters::Synchronizer<sync_pol> sync(sync_pol(10), left_sub,right_sub);
     sync.registerCallback(boost::bind(&ImageGrabber::GrabStereo,&igb,_1,_2));
-
+   
     ros::spin();
-
     // Stop all threads
     SLAM.Shutdown();
 
@@ -130,6 +145,7 @@ int main(int argc, char **argv)
 
 void ImageGrabber::GrabStereo(const sensor_msgs::ImageConstPtr& msgLeft,const sensor_msgs::ImageConstPtr& msgRight)
 {
+    Sophus::SE3f Tcw;
     // Copy the ros image message to cv::Mat.
     cv_bridge::CvImageConstPtr cv_ptrLeft;
     try
@@ -158,13 +174,37 @@ void ImageGrabber::GrabStereo(const sensor_msgs::ImageConstPtr& msgLeft,const se
         cv::Mat imLeft, imRight;
         cv::remap(cv_ptrLeft->image,imLeft,M1l,M2l,cv::INTER_LINEAR);
         cv::remap(cv_ptrRight->image,imRight,M1r,M2r,cv::INTER_LINEAR);
-        mpSLAM->TrackStereo(imLeft,imRight,cv_ptrLeft->header.stamp.toSec());
+       Tcw = mpSLAM->TrackStereo(imLeft,imRight,cv_ptrLeft->header.stamp.toSec());
     }
     else
     {
-        mpSLAM->TrackStereo(cv_ptrLeft->image,cv_ptrRight->image,cv_ptrLeft->header.stamp.toSec());
+       Tcw = mpSLAM->TrackStereo(cv_ptrLeft->image,cv_ptrRight->image,cv_ptrLeft->header.stamp.toSec());
     }
-
+    this->PublishPose(Tcw);
 }
 
+void ImageGrabber::PublishPose(const Sophus::SE3f& Tcw) {
+   
+    Sophus::SE3f Twc = Tcw.inverse();
 
+    // **构造 ROS 位姿消息**
+    geometry_msgs::PoseStamped pose_msg;
+    pose_msg.header.stamp = ros::Time::now();
+    pose_msg.header.frame_id = "map";
+
+    // **提取平移量**
+    Eigen::Vector3f t = Twc.translation();
+    pose_msg.pose.position.x = t.x();
+    pose_msg.pose.position.y = t.y();
+    pose_msg.pose.position.z = t.z();
+
+    // **提取旋转矩阵，并转换为四元数**
+    Eigen::Quaternionf q(Twc.unit_quaternion());
+    pose_msg.pose.orientation.x = q.x();
+    pose_msg.pose.orientation.y = q.y();
+    pose_msg.pose.orientation.z = q.z();
+    pose_msg.pose.orientation.w = q.w();
+
+    // **发布位姿**
+    pose_pub.publish(pose_msg);
+}
