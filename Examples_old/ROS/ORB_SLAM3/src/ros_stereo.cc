@@ -123,8 +123,8 @@ int main(int argc, char **argv)
   
     // 初始化发布器
     pose_pub = nh.advertise<geometry_msgs::PoseStamped>("/orb_slam3/pose", 10);
-    message_filters::Subscriber<sensor_msgs::Image> left_sub(nh, "/camera/fisheye1/image_raw", 1);
-    message_filters::Subscriber<sensor_msgs::Image> right_sub(nh, "/camera/fisheye2/image_raw", 1);
+    message_filters::Subscriber<sensor_msgs::Image> left_sub(nh, "/camera/left/image_raw", 1);
+    message_filters::Subscriber<sensor_msgs::Image> right_sub(nh, "/camera/right/image_raw", 1);
     typedef message_filters::sync_policies::ApproximateTime<sensor_msgs::Image, sensor_msgs::Image> sync_pol;
     message_filters::Synchronizer<sync_pol> sync(sync_pol(10), left_sub,right_sub);
     sync.registerCallback(boost::bind(&ImageGrabber::GrabStereo,&igb,_1,_2));
